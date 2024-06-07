@@ -7,6 +7,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:openfoodfacts/openfoodfacts.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'chart.dart';
+import 'system_prompt.dart';
+import 'dart:convert';
 
 List<CameraDescription> cameras = [];
 
@@ -14,10 +19,12 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   cameras = await availableCameras();
   await dotenv.load(fileName: ".env");
-  runApp(MyApp());
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -25,12 +32,14 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: CameraScreen(),
+      home: const CameraScreen(),
     );
   }
 }
 
 class CameraScreen extends StatefulWidget {
+  const CameraScreen({super.key});
+
   @override
   _CameraScreenState createState() => _CameraScreenState();
 }
@@ -41,17 +50,20 @@ class _CameraScreenState extends State<CameraScreen> {
   late Timer _timer;
   late final GenerativeModel _model;
   late final ChatSession _chat;
-  String analysisText = 'Point the Camera toward the label';
+  Map<String, dynamic> analysisMap = {};
+
   bool stop = false;
   bool showCamPreview = true;
   @override
   void initState() {
     super.initState();
     final apiKey = dotenv.env["APIKEY"];
-    if(apiKey != null) {
+    if (apiKey != null) {
       _model = GenerativeModel(
           model: 'gemini-1.5-flash-latest',
-          apiKey: apiKey);
+          apiKey: apiKey,
+          generationConfig:
+              GenerationConfig(responseSchema: Schema(SchemaType.object)));
       _chat = _model.startChat();
 
       _controller = CameraController(cameras[0], ResolutionPreset.medium);
@@ -95,7 +107,13 @@ class _CameraScreenState extends State<CameraScreen> {
     );
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(title: const Text('Wiky : Will it kill you', style: TextStyle(color: Colors.white, fontFamily: 'mukta'),), backgroundColor: Colors.black,),
+      appBar: AppBar(
+        title: const Text(
+          'Wiky : Will it kill you',
+          style: TextStyle(color: Colors.white, fontFamily: 'mukta'),
+        ),
+        backgroundColor: Colors.black,
+      ),
       body: FutureBuilder<void>(
         future: _initializeControllerFuture,
         builder: (context, snapshot) {
@@ -149,40 +167,51 @@ class _CameraScreenState extends State<CameraScreen> {
       Uint8List imageUint = await image.readAsBytes();
       final content = [
         Content.multi([
-          TextPart(
-            // NOTE: ADD command here
-              'Tell me by analyzing the food label you see if the packed product is ok for consuming'),
-          // The only accepted mime types are image/*.
+          TextPart(prompt),
           DataPart('image/jpeg', imageUint),
         ])
       ];
+
       var response = await _model.generateContent(content);
+      String responseStr = response.candidates.map((e) => e.text).join('');
+      Map<String, dynamic> responseMap =
+          jsonDecode(responseStr.substring(7, responseStr.length - 3));
       showModalBottomSheet(
           context: context,
           builder: (builder) {
             return Container(
-              height: 400,
-              width: double.infinity,
-              decoration: const BoxDecoration(),
-              child: Column(
-                children: [
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 20, horizontal: 5),
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Text(
-                        analysisText,
-                        style: const TextStyle(fontSize: 14, fontFamily: 'mukta'),
+                height: 400,
+                width: double.infinity,
+                decoration: const BoxDecoration(),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 20, horizontal: 5),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Text(
+                            analysisMap['analysis'] ?? 'No analysis found',
+                            style: const TextStyle(
+                                fontSize: 14, fontFamily: 'mukta'),
+                          ),
+                        ),
                       ),
-                    ),
+                      Padding(
+                          padding:
+                              EdgeInsets.symmetric(vertical: 7, horizontal: 5),
+                          child: SizedBox(
+                            height: 300,
+                            width: 300,
+                            child: PieChartWidget(analysisMap['details'] ?? {}),
+                          )),
+                    ],
                   ),
-                ],
-              ),
-            );
+                ));
           });
       setState(() {
-        analysisText = response.text ?? "No Response from Gemini";
+        analysisMap = responseMap;
         stop = true;
       });
     } catch (e) {
